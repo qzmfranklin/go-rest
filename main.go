@@ -1,11 +1,14 @@
 package main
 
 import (
-	"log"
+	"flag"
 	"net/http"
 )
 
 func main() {
+	var host = flag.String("host", "", "ip address to bind to (the default emtpy means all interfaces)")
+	var port = flag.String("port", "32000", "port to bind to")
+	flag.Parse()
 	router := NewRouter()
-	log.Fatal(http.ListenAndServe(":49700", router))
+	http.ListenAndServe(*host+":"+*port, router)
 }

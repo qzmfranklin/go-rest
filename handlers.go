@@ -6,30 +6,46 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	//"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
 type Record struct {
+	// The status is defined in bringup/collectory.py.
 	Status    int       `json:"status"`
 	Message   string    `json:"message"`
 	TimeStamp time.Time `json:"timestamp"`
 }
 
-var _db map[string][]Record = nil
+var dbMutex sync.Mutex = sync.Mutex{}
+var db map[string][]Record = make(map[string][]Record)
 
 func PutRecord(w http.ResponseWriter, r *http.Request) {
-	if _db == nil {
-		_db = make(map[string][]Record)
-	}
+	var record Record
+	record.Status = -1
+	record.TimeStamp = time.Now().UTC()
 
-	const maxBytes = 1023
+	vars := mux.Vars(r)
+	name := vars["name"]
+	if _, ok := db[name]; ok {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Cannot create record for '%s'. Records already exist.\n", name)
+	} else {
+		dbMutex.Lock()
+		db[name] = []Record{record}
+		dbMutex.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+func PostRecord(w http.ResponseWriter, r *http.Request) {
+	const maxBytes = 256
 	body, err := ioutil.ReadAll(io.LimitReader(r.Body, maxBytes))
 	if err != nil {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		fmt.Fprintf(w, "Request exceeds the %s bytes.\n", maxBytes)
+		fmt.Fprintf(w, "Request exceeds the maximal size of %s bytes.\n", maxBytes)
 		return
 	}
 	if err := r.Body.Close(); err != nil {
@@ -37,6 +53,7 @@ func PutRecord(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "The server failed to close the input stream.\n", maxBytes)
 		return
 	}
+
 	var record Record
 	if err := json.Unmarshal(body, &record); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -44,40 +61,39 @@ func PutRecord(w http.ResponseWriter, r *http.Request) {
 			string(body[:]))
 		return
 	}
-
 	record.TimeStamp = time.Now().UTC()
 
 	vars := mux.Vars(r)
 	name := vars["name"]
-	const maxRecordNum = 10
-	if records, ok := _db[name]; ok {
+	const maxRecordNum = 20
+	dbMutex.Lock()
+	if records, ok := db[name]; ok {
 		if len(records) >= maxRecordNum {
-			_db[name] = append(records[1:], record)
+			db[name] = append(records[1:], record)
 		} else {
-			_db[name] = append(records, record)
+			db[name] = append(records, record)
 		}
+		w.WriteHeader(http.StatusCreated)
 	} else {
-		_db[name] = []Record{record}
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Cannot append record for '%s'. No records exist.\n", name)
 	}
-	w.WriteHeader(http.StatusCreated)
+	dbMutex.Unlock()
 }
 
 func GetAllRecords(w http.ResponseWriter, r *http.Request) {
-	if _db == nil {
-		_db = make(map[string][]Record)
-	}
-	if err := json.NewEncoder(w).Encode(_db); err != nil {
+	dbMutex.Lock()
+	if err := json.NewEncoder(w).Encode(db); err != nil {
 		panic(err)
 	}
+	dbMutex.Unlock()
 }
 
 func GetRecord(w http.ResponseWriter, r *http.Request) {
-	if _db == nil {
-		_db = make(map[string][]Record)
-	}
 	vars := mux.Vars(r)
 	name := vars["name"]
-	if records, ok := _db[name]; ok {
+	dbMutex.Lock()
+	if records, ok := db[name]; ok {
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(records); err != nil {
 			panic(err)
@@ -86,20 +102,24 @@ func GetRecord(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone)
 		fmt.Fprintf(w, "No record found for '%s'.\n", name)
 	}
+	dbMutex.Unlock()
 }
 
 func GetIndex(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "not implemented yet\n")
+	fmt.Fprintf(w, "not implemented yet")
 }
 
 func DeleteRecord(w http.ResponseWriter, r *http.Request) {
-	if _db != nil {
-		vars := mux.Vars(r)
-		name := vars["name"]
-		delete(_db, name)
-	}
+	vars := mux.Vars(r)
+	name := vars["name"]
+	dbMutex.Lock()
+	delete(db, name)
+	dbMutex.Unlock()
 }
 
 func DeleteAllRecords(w http.ResponseWriter, r *http.Request) {
-	_db = nil
+	dbMutex.Lock()
+	db = nil
+	db = make(map[string][]Record)
+	dbMutex.Unlock()
 }

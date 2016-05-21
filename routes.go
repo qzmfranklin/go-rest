@@ -20,11 +20,15 @@ var routes = []ApiRoute{
 		"/",
 		GetIndex,
 	},
-
 	ApiRoute{
 		"PUT",
 		"/api/{name}/",
 		PutRecord,
+	},
+	ApiRoute{
+		"POST",
+		"/api/{name}/",
+		PostRecord,
 	},
 	ApiRoute{
 		"GET",
